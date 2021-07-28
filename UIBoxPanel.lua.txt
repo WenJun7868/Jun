@@ -1,0 +1,249 @@
+local UIBoxPanel = class("UIBoxPanel", UISimPanel)
+
+local SLIDER_OFFSET = 500
+function UIBoxPanel:ctor(skin, __Class_Derived_From_UIItemPanel, clickCallback, layout)
+    self.clickCallback = clickCallback
+    self.layout = layout
+    self.ItemPanel = __Class_Derived_From_UIItemPanel or UIItemPanel;
+    UISimPanel.ctor(self, skin);
+end
+
+function UIBoxPanel:OnInit()
+    self.items = {};
+    self.ItemSkin = self.skin:Find("Item")
+
+    self.delayCallback = table.handler(self,self.OnDelay)
+    self.delaySlider = table.handler(self,self.OnDelaySlider)
+
+    --1左 2右 3上 4下 5缩放
+    self.sliderType = 0
+    self.sliderOffset = SLIDER_OFFSET
+    --1正序 -1倒序
+    self.reverse = 1
+    self.tweenList = {}
+    --1道具奖励特效
+    self.effectType = 0
+    --展示音效
+    self.soundType = 0
+    self.effectList = {}
+end
+
+function UIBoxPanel:OnShow()
+end
+
+function UIBoxPanel:OnHide()
+    if (self.preSelectItem) then
+        self.preSelectItem:SetSelect(false)
+    end
+    self.preSelectItem = nil
+    self.selectIndex = -1
+    for _,v in pairs(self.items) do
+        v:Hide()
+    end
+    self:CleanSlider()
+    self:CleanEffect()
+end
+
+function UIBoxPanel:ScrollToIndex(index,type)
+    if(index > #self.items) then
+        error("index大于列表长度")
+        return 
+    end
+
+    timeMgr:AddCallEndOfFrame(self.delayCallback,{index,type})
+end
+
+function UIBoxPanel:OnDelay(param)
+    if(param[2] == nil or param[2] == 1) then
+        self:HorizonScroll(param[1])
+    elseif param[2] == 2 then
+        self:VerticalScroll(param[1])
+    else
+        -- self:GridScroll(param[1])        
+    end
+end
+
+function UIBoxPanel:HorizonScroll(index)
+    local layout = self.skin:GetComponent(typeof(UnityEngine.UI.HorizontalLayoutGroup))
+    local paddingRight = layout.padding.right
+
+    local itemSkin = self.items[index].skin
+    local targetX = itemSkin.localPosition.x + itemSkin.rect.x
+    local canScrollPixed = self.skin.rect.width - self.skin.parent.rect.width + paddingRight
+    
+    if(canScrollPixed > 0) then
+        canScrollPixed = targetX > canScrollPixed and canScrollPixed or targetX
+        self.skin.localPosition = Vector3(-canScrollPixed, 0, 0)
+    end
+end
+
+function UIBoxPanel:VerticalScroll(index)
+    local layout = self.skin:GetComponent(typeof(UnityEngine.UI.VerticalLayoutGroup))
+    local paddingBottom = layout.padding.bottom
+
+    local itemSkin = self.items[index].skin
+    local targetY = itemSkin.localPosition.y - itemSkin.rect.y
+    local canScrollPixed = self.skin.rect.height - self.skin.parent.rect.height + paddingBottom
+    
+    if(canScrollPixed > 0) then
+        canScrollPixed = targetY > canScrollPixed and canScrollPixed or targetY
+        self.skin.localPosition = Vector3(0, -canScrollPixed, 0)
+    end
+end
+
+function UIBoxPanel:SetClickCallback(callback, btnTweenType)
+    for i = 1, #self.items do
+        self.items[i]:SetClickCallback(callback, btnTweenType)
+    end
+end
+
+function UIBoxPanel:SetData(itemDatas)
+    if itemDatas == nil then
+        return;
+    end
+
+    self:CleanSlider()
+
+    local maxLen = math.max(#self.items, #itemDatas)
+    for i = 1, maxLen do
+        if itemDatas[i] then
+            local item = self:GetItem(i)
+            item.index = i
+            item:Show()
+            item:SetData(itemDatas[i])
+
+            if self.layout then
+                item.skin.anchoredPosition = Vector2(self.layout[1]*(i-1), self.layout[2]*(i-1))
+            end
+
+            if(self.sliderType > 0) then
+                --不能设置item节点的active，会影响布局
+                item.skin.localScale = Vector3.zero
+            end
+        else
+            if self.items[i] then
+                self.items[i]:Hide()
+            end
+        end
+    end
+
+    if(self.sliderType > 0) then
+        self.curSliderIndex = self.reverse == 1 and 1 or maxLen
+        self.tweenList = {}
+        -- timeMgr:AddDelay("UIBOX_SLIDER", 0.1, self.delaySlider, maxLen)
+        -- timeMgr:AddDelay("UIBOX_SLIDER", 0.1, self.delaySlider, 1)
+        self.unScaleDelay = UnScaledDelay.new(0.1, self.delaySlider, maxLen)
+        self.unScaleDelay:Start()
+    end
+
+    if self.effectType > 0 then
+        self.effectList = {}
+    end
+
+    if(self.clickCallback) then
+        self:SetClickCallback(self.clickCallback, 1)
+    --[[ else
+        if(self.ItemPanel.__cname == "UIIconPanel") then
+            self:SetClickCallback(GoodsUtil.OnTip, 1)
+        end ]]
+    end
+end
+
+--更新单独的一项
+function UIBoxPanel:UpdateItem(index, itemData)
+    if self.items[index] ~= nil then
+        self.items[index]:SetData(itemData);
+    end
+end
+
+--设置选中某一项
+function UIBoxPanel:Select(index)
+    if (self.preSelectItem) then
+        self.preSelectItem:SetSelect(false)
+    end
+    self.selectIndex = index
+    self.items[index]:SetSelect(true)
+    self.preSelectItem = self.items[index]
+end
+
+function UIBoxPanel:GetItem(index)
+    local item = self.items[index]
+    if (item == nil) then
+        local itemSkin = self.skin:Find("Item" .. index)
+        if itemSkin == nil then
+            itemSkin = Object.Instantiate(self.ItemSkin.gameObject,Vector3.zero,Quaternion.identity).transform
+            itemSkin.name = "Item"..index
+            itemSkin:SetParent(self.skin, false)                
+        end
+        item = self.ItemPanel.new(itemSkin)
+        table.insert(self.items, item)
+    end
+    return item
+end
+
+function UIBoxPanel:CallFunc(funcName, ...)
+    for i = 1, #self.items do
+        if(self.items[i][funcName]) then
+            self.items[i][funcName](self.items[i], ...)
+        end
+    end
+end
+
+ function UIBoxPanel:OnDelaySlider()
+    local item = self.items[self.curSliderIndex]
+    if(item == nil or not item.visible) then return end
+
+    local itemSkin = item.skin
+    local tween
+    if(self.sliderType == 1) then
+        itemSkin.localScale = Vector3.one
+        tween = itemSkin:DOLocalMoveX(-self.sliderOffset, 0.3):From(true):SetUpdate(true)
+    elseif(self.sliderType == 2) then
+        itemSkin.localScale = Vector3.one
+        tween = itemSkin:DOLocalMoveX(self.sliderOffset, 0.3):From(true):SetUpdate(true)
+    elseif(self.sliderType == 3) then
+        itemSkin.localScale = Vector3.one
+        tween = itemSkin:DOLocalMoveY(self.sliderOffset, 0.3):From(true):SetUpdate(true)
+    elseif(self.sliderType == 4) then
+        itemSkin.localScale = Vector3.one
+        tween = itemSkin:DOLocalMoveY(-self.sliderOffset, 0.3):From(true):SetUpdate(true)
+    elseif(self.sliderType == 5) then
+        tween = itemSkin:DOScale(Vector3.one, 0.3):SetUpdate(true)
+    end
+    table.insert(self.tweenList, tween)
+
+    if self.effectType == 1 then
+        table.insert(self.effectList, GoodsUtil.AddRewardGoodsEffect(itemSkin))
+    end
+
+    self.curSliderIndex = self.curSliderIndex + self.reverse
+
+    if(self.soundType == 1) then
+        audioMgr:Play("huodedaoju.mp3")
+    end
+    -- if(self.items[self.curSliderIndex]) then
+    --     timeMgr:AddDelay("UIBOX_SLIDER", 0.1, self.delaySlider, 1)
+    -- end
+end
+
+function UIBoxPanel:CleanSlider()
+    if(self.sliderType > 0) then 
+        -- timeMgr:RemoveDelay(self.delaySlider)
+        if self.unScaleDelay then
+            self.unScaleDelay:Stop()
+        end
+        for i,v in ipairs(self.tweenList) do
+            v:Kill()
+        end
+    end
+end
+
+function UIBoxPanel:CleanEffect()
+    if self.effectType > 0 then
+        for _,v in ipairs(self.effectList) do
+            GoodsUtil.RecycleGoodsEffect(v)
+        end
+    end
+end
+
+return UIBoxPanel
