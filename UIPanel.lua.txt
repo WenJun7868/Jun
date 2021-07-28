@@ -1,0 +1,370 @@
+local UIPanel = class("UIPanel");
+
+local Canvas = Canvas or UnityEngine.Canvas
+local Linear = Linear or Tweening.Ease.Linear
+local InExpo = Tweening.Ease.InExpo
+local Time = UnityEngine.Time
+
+UIPanel.TWEEN_SCALE = 1         --缩放
+UIPanel.TWEEN_LEFT_TO_RIGHT = 2 --左边移动
+UIPanel.TWEEN_RIGHT_TO_LEFT = 3 --右边移动
+UIPanel.TWEEN_TOP_TO_BOTTOM = 4 --上部到底部
+UIPanel.TWEEN_BOTTOM_TO_TOP = 5 -- 底部到顶上
+
+UIPanel.BG_TYPE1 = 1 --不透明并可点击
+UIPanel.BG_TYPE2 = 2 --不透明不可点击
+UIPanel.BG_TYPE3 = 3 --透明可点击
+UIPanel.BG_TYPE4 = 4 --透明不可点击
+
+UIPanel.BG_ALPHA1 = 0.6     --黑底透明度
+
+local TWEEN_FORWARD_TIME = 0.2
+local TWEEN_BACK_TIME= 0.3
+UIPanel.LEFT_VECTOR2 = UnityEngine.Vector2(-200 , 0)
+UIPanel.RIGHT_VECTOR2 = UnityEngine.Vector2(200 , 0)
+UIPanel.TOP_VECTOR2 = UnityEngine.Vector2(0, 280)
+UIPanel.BOTTOM_VECTOR2 = UnityEngine.Vector2(0, -280)
+UIPanel.SCALE_ZERO = UnityEngine.Vector3(0.01, 0.01, 0.01)
+
+function UIPanel:ctor(skin)
+    self.skin = skin;       -- 皮肤为：Transform
+    self.name = skin.name;  -- 面板名称
+    self.this = skin:GetComponent(typeof(CSUIPanel));  -- 面板对应的C# UIPanel组件
+    self.canvas = skin:GetComponent(typeof(Canvas))
+    self.visible = false;
+    self.tweenType = 0;     -- tweenType：0关闭，1缩放，2从左进入，3从右进入
+    self.bgType = 0;        -- bgType：0关闭，1不透明并可点击，2不透明不可点击，3透明可点击，4透明不可点击
+    self.blackgroud = nil
+    self.delayClose = false --限制关闭时间，delayCloseTime后才能点击closebtn关闭
+    self.delayCloseTime = 1.5
+    self.bgAlpha = UIPanel.BG_ALPHA1
+    self.onCloseBtnHandler = table.handler(self, self.OnClose)
+    self.closeBtn = self.skin:Find("CloseBtn")
+    if self.closeBtn ~= nil then
+        self.closeBtn = self:GetComponent(self.closeBtn, typeof(UIButton));
+        self.closeBtn.audioStyle = 1
+        self:AddEvents(self.closeBtn, self.onCloseBtnHandler);
+    end
+    self:OnInit();
+    self.onOpenTweenComplete = table.handler(self, self.OnOpenTweenComplete)
+
+    if(self.tweenType > 0) then
+        self.canvasGroup = skin:GetOrAddComponent(typeof(CanvasGroup))
+    end
+end
+
+-- 初始化 self.tweenType：0=屏蔽打开动画，1或不指定=默认scale动画，2=position动画
+function UIPanel:OnInit()
+end
+
+-- 打开面板事件
+function UIPanel:OnShow()
+end
+
+-- 关闭面板事件
+function UIPanel:OnHide()
+end
+
+-- 返回登录时调用
+function UIPanel:OnReset()
+end
+
+-- 设置面板数据
+function UIPanel:SetData(data)
+end
+
+-- function UIPanel:OnUpdate(deltaTime)
+-- end
+
+-- 打开面板
+function UIPanel:Show()
+    if self.visible then
+        return false;
+    end
+    if eventMgr then
+        eventMgr:Dispatch(GlobalEvent.PANEL_BEFORE_OPEN, self.name);
+    end
+    self.visible = true;
+    self.hideReal = false;
+    if self.bgType > 0 and self.this ~= nil then
+        self:SetBackground()
+    end
+    if self.bgType == 1 or self.bgType == 2 then
+        -- audioMgr:Play("popup.ogg")
+    end
+    self.skin.gameObject:SetActive(true);
+    if self.openTween ~= nil then
+        self.openTween.onComplete = nil;
+        self.openTween = nil;
+    end
+    self:SetRawImage(true)
+    self:OnShow();
+    if self.tweenType >= 1 then
+        self:PlayTween(true);
+    end
+    if Net and self.msgFuncs then
+        for msgID, msgFunc in pairs(self.msgFuncs) do
+            if type(msgFunc) == "function" then
+                Net.Register(msgID, msgFunc, false)
+            else
+                Net.Register(msgID, msgFunc.func, msgFunc.errorcode)
+            end
+        end
+    end
+    if self.events then
+        self:AddEvents(self.events);
+    end
+    if eventMgr then
+        eventMgr:Dispatch(GlobalEvent.PANEL_OPEN, self.name);
+    end
+
+    if(self.delayClose) then
+        self.openTime = Time.unscaledTime
+    end
+    return true;
+end
+
+-- 关闭面板
+function UIPanel:Hide()
+    if not self.visible then
+        return false;
+    end
+    self:SyncHide()
+
+    self.visible = false;
+    if Net and self.msgFuncs then
+        for msgID,msgFunc in pairs(self.msgFuncs) do
+            if type(msgFunc) == "function" then
+                Net.Unregister(msgID, msgFunc)
+            else
+                Net.Unregister(msgID, msgFunc.func)
+            end
+        end
+    end
+    if self.events then
+        self:RemoveEvents(self.events);
+    end
+    if self.tweenType >= 1 then
+        self:PlayTween(false);
+    else
+        self:HideReal();
+    end
+    if eventMgr then
+        eventMgr:Dispatch(GlobalEvent.PANEL_CLOSE, self.name);
+    end
+    return true;
+end
+
+function UIPanel:HideReal()
+    --移除黑背景
+    if self.blackgroud ~= nil then
+        self:RemoveEvents(self.blackgroud:GetComponent(typeof(UIButton)), self.onCloseBtnHandler)
+        poolMgr:Push(self.blackgroud.name .. "Pool", self.blackgroud)
+        self.blackgroud.transform.sizeDelta = Vector2.zero
+        self.blackgroud = nil
+    end
+
+    self.skin.gameObject:SetActive(false);
+    self.hideReal = true
+    self:SetRawImage(false)
+    self:OnHide();
+end
+
+--面板不是隐藏状态下的瞬间Hide，外部不再覆盖Hide方法
+function UIPanel:SyncHide()
+
+end
+
+function UIPanel:SetRawImage(active)
+    local rawimages = self.skin:GetComponentsInChildren(typeof(UIRawImage), true)
+    for i = 0, rawimages.Length - 1 do
+        if active then
+            rawimages[i]:RefreshTexture()
+        else
+            rawimages[i]:Dispose()
+        end
+    end
+end
+
+-- 播放打开动画
+function UIPanel:PlayTween(isPlayForward)
+    self.openTween = nil
+    if self.tweenType == UIPanel.TWEEN_SCALE then
+        if isPlayForward then
+            self.skin.localScale = UIPanel.SCALE_ZERO
+            self.openTween = self.skin:DOScale(Vector3.one, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+        else
+            self.openTween = self.skin:DOScale(UIPanel.SCALE_ZERO, TWEEN_BACK_TIME):SetEase(InExpo):SetUpdate(true)
+        end
+        self:DOAlpha(isPlayForward)
+    elseif self.tweenType == UIPanel.TWEEN_LEFT_TO_RIGHT then
+        if isPlayForward then
+            self.skin.anchoredPosition = UIPanel.LEFT_VECTOR2
+            self.openTween = self.skin:DOLocalMoveX(0, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+        else
+            self.openTween = self.skin:DOLocalMoveX(-G.DESIGN_WIDTH, TWEEN_BACK_TIME):SetEase(InExpo):SetUpdate(true)
+        end
+        self:DOAlpha(isPlayForward)
+    elseif self.tweenType == UIPanel.TWEEN_RIGHT_TO_LEFT then
+        if isPlayForward then
+            self.skin.anchoredPosition = UIPanel.RIGHT_VECTOR2
+            self.openTween = self.skin:DOLocalMoveX(0, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+        else
+            self.openTween = self.skin:DOLocalMoveX(G.DESIGN_WIDTH, TWEEN_BACK_TIME):SetEase(InExpo):SetUpdate(true)
+        end
+        self:DOAlpha(isPlayForward)
+    elseif self.tweenType == UIPanel.TWEEN_TOP_TO_BOTTOM then
+        if isPlayForward then
+            self.skin.anchoredPosition = UIPanel.TOP_VECTOR2
+            self.openTween = self.skin:DOLocalMoveY(0, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+        else
+            self.openTween = self.skin:DOLocalMoveY(G.DESIGN_HEIGHT, TWEEN_BACK_TIME):SetEase(InExpo):SetUpdate(true)
+        end
+        self:DOAlpha(isPlayForward)
+    elseif self.tweenType == UIPanel.TWEEN_BOTTOM_TO_TOP then
+        if isPlayForward then
+            self.skin.anchoredPosition = UIPanel.BOTTOM_VECTOR2
+            self.openTween = self.skin:DOLocalMoveY(0, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+        else
+            self.openTween = self.skin:DOLocalMoveY(-G.DESIGN_HEIGHT, TWEEN_BACK_TIME):SetEase(InExpo):SetUpdate(true)
+        end
+        self:DOAlpha(isPlayForward)
+    end
+
+    if self.openTween ~= nil then
+        self.openTween.onComplete = self.onOpenTweenComplete
+    end
+end
+
+function UIPanel:DOAlpha(isPlayForward)
+    if(isPlayForward) then
+        self.canvasGroup.alpha = 0
+        self.canvasGroup:DOFade(1, TWEEN_FORWARD_TIME):SetEase(Linear):SetUpdate(true)
+    else
+        self.canvasGroup:DOFade(0.3, TWEEN_BACK_TIME):SetEase(Linear):SetUpdate(true)
+    end
+end
+
+-- 面板打开或关闭结束
+function UIPanel:OnOpenTweenComplete()
+    if not self.visible then
+        self:HideReal();
+    end
+    if self.openTween ~= nil then
+        self.openTween.onComplete = nil;
+        self.openTween = nil;
+    end
+end
+
+-- 点击关闭按钮
+function UIPanel:OnClose()
+    if(self.delayClose and (Time.unscaledTime - self.openTime) < self.delayCloseTime) then
+        return
+    end
+
+    --[[ if audioMgr then
+        audioMgr:Play("close.ogg", false)
+    end ]]
+    self:Hide()
+end
+
+-- 设置背景
+function UIPanel:SetBackground()
+    if (not uiMgr) or (not poolMgr) or (not ObjectUtil) then
+        return
+    end
+    if (self.blackgroud) then 
+        self.blackgroud:GetComponent(typeof(Canvas)).sortingOrder = self.this.sortingOrder - 2
+        return 
+    end
+
+    local isTransparent = self.bgType == UIPanel.BG_TYPE3 or self.bgType == UIPanel.BG_TYPE4
+    local isClick = self.bgType == UIPanel.BG_TYPE1 or self.bgType == UIPanel.BG_TYPE3
+
+    local blackName = isTransparent and uiMgr.blackTransparentTrans.name or uiMgr.blackTrans.name
+    self.blackgroud = poolMgr:Pop(blackName .. "Pool")
+    self.blackgroud.name = blackName
+    
+    if (isClick) then
+        self:AddEvents(self.blackgroud:GetComponent(typeof(UIButton)), self.onCloseBtnHandler)
+    end
+    -- ObjectUtil.SetParent(self.blackgroud, self.skin)
+    ObjectUtil.SetParent(self.blackgroud, uiMgr.root)
+    self.blackgroud.transform.sizeDelta = Vector2.zero
+    self.blackgroud:GetComponent(typeof(Canvas)).sortingOrder = self.this.sortingOrder - 2
+    if not isTransparent then
+        self.blackgroud:GetComponent(typeof(Image)).color = Color(0, 0, 0, self.bgAlpha)
+    end
+end
+
+-- 单个或批量添加事件
+function UIPanel:AddEvents(eventsOrBtn, handler)
+    if handler ~= nil then
+        eventsOrBtn:AddEventListener(handler);
+    else
+        for k,v in pairs(eventsOrBtn) do
+            k:AddEventListener(v);
+        end
+    end
+end
+
+-- 单个或批量移除事件
+function UIPanel:RemoveEvents(eventsOrBtn, handler)
+    if handler ~= nil then
+        eventsOrBtn:RemoveEventListener(handler);
+    else
+        for k,v in pairs(eventsOrBtn) do
+            k:RemoveEventListener(v);
+        end
+    end
+end
+
+-- 获取或添加组件
+function UIPanel:GetComponent(child, componentType)
+    if not componentType then
+        print("Error：Component 为空, child: ", child)
+        return nil
+    end
+    local childType = type(child);
+    local childObject = child;
+    if childType == "string" then
+        childObject = self.skin:Find(child)
+    end
+    if childObject ~= nil then
+        local b = childObject:GetOrAddComponent(componentType);
+        if componentType.Name == "UIButton" then
+            b:Reset();
+        end
+        return b;
+    else
+        -- if (childType == "string") then
+        --     error("Error: 无法查找到皮肤:" .. child);
+        -- else
+        --     error("Error: 无法查找到皮肤");
+        -- end
+    end
+    return nil
+end
+
+-- 面板销毁时调用
+function UIPanel:OnDestory()
+    if self.openTween ~= nil then
+        self.openTween.onComplete = nil;
+        self.openTween = nil;
+    end
+    if self.closeBtn ~= nil and self.onCloseBtnHandler ~= nil then
+        self:RemoveEvents(self.closeBtn, self.onCloseBtnHandler)
+    end
+    if not self.hideReal then
+        self:OnHide()
+    end
+
+    if self.blackgroud ~= nil then
+        self:RemoveEvents(self.blackgroud:GetComponent(typeof(UIButton)), self.onCloseBtnHandler)
+        poolMgr:Push(self.blackgroud.name .. "Pool", self.blackgroud)
+        self.blackgroud.transform.sizeDelta = Vector2.zero
+        self.blackgroud = nil
+    end
+end
+
+return UIPanel
