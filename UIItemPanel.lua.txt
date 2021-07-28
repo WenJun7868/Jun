@@ -1,0 +1,54 @@
+local UIItemPanel = class("UIItemPanel", UISimPanel)
+
+function UIItemPanel:ctor(skin)
+    UISimPanel.ctor(self,skin)
+
+    self:UIItemInit()
+end
+
+function UIItemPanel:UIItemInit()
+    -- UIBox会自动赋值
+    self.index = 0;
+    self.data = nil;
+    self.clickHandler = table.handler(self, self.OnItemClick);
+    self.tweenSkin = self.skin:Find("TweenSkin")
+end
+
+function UIItemPanel:Hide()
+    UISimPanel.Hide(self)
+
+    self:UIItemHide()
+end
+
+function UIItemPanel:UIItemHide()
+    if(self.clickCallback ~= nil and self.btn ~= nil) then
+        self:RemoveEvents(self.btn, self.clickHandler);
+        self.clickCallback = nil
+    end
+end
+
+function UIItemPanel:OnItemClick()
+    -- -- if self.data ~= nil then
+        if self.clickCallback ~= nil then
+            self.clickCallback(self.data , self);
+        end
+    -- end
+end
+
+function UIItemPanel:SetClickCallback(callback, btnTweenType)
+    self.clickCallback = callback
+    if(self.btn == nil) then
+        self.btn = self.GetComponent(self, self.skin, typeof(UIButton));
+    end
+    self:AddEvents(self.btn, self.clickHandler)
+    if (btnTweenType == nil) then
+        btnTweenType = 0
+    end
+    self.btn.tweenType = self.btnTweenType or btnTweenType
+end
+
+function UIItemPanel:SetData(param)
+    self.data = param;
+end
+
+return UIItemPanel
